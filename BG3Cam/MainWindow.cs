@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using SharpDX.XInput;
+using Timer = System.Timers.Timer;
 
 namespace BG3Cam
 {
@@ -23,6 +24,7 @@ namespace BG3Cam
         Dictionary<nint, float> defaultVals = new Dictionary<nint, float>();
         int prevMouseY;
         float curTilt;
+        Timer timer;
 
         Controller controller;
         Gamepad gamepad;
@@ -57,8 +59,7 @@ namespace BG3Cam
             var camMaxAbs = mem.FindPattern("F3 0F 10 80 ? ? ? ? C3", bytes: camFuncBytes);
             camMaxAbsOffset = camFuncBytes[camMaxAbs + 4];
 
-            var camTilt = mem.FindPattern("C3 F3 0F 10 80 ? ? ? ? F3 0F 10 88 ? ? ? ? 0F 14 C8 66 48 0F 7E C8 C3");
-            camTiltOffset = mem.ReadProcessMemory<int>(camTilt + 5);
+            camTiltOffset = 0x160;
 
             var combatZoomOut = mem.FindPattern("F3 45 0F 11 4C 24 5C");
             combatZoomOutAddr = mem.ReadProcessMemory<int>(combatZoomOut);
@@ -119,10 +120,17 @@ namespace BG3Cam
 
             mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset, curTilt);
             mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset + 4, curTilt);
-            ChangePitchOnMouseMove();
+
+            timer = new Timer();
+            timer.Interval = 16;
+            timer.AutoReset = true;
+            timer.Elapsed += (o, args) =>
+            {
+                ChangePitchOnMouseMove();
+            };
+            timer.Start();
         }
 
-        bool running = true;
         float AddDefaultVal(nint addr)
         {
             defaultVals[addr] = mem.ReadProcessMemory<float>(addr);
@@ -130,7 +138,7 @@ namespace BG3Cam
         }
         void MainWindow_FormClosing(object sender, FormClosingEventArgs e)
         {
-            running = false;
+            timer?.Stop();
             foreach (var val in defaultVals) mem.WriteProcessMemory(val.Key, val.Value);
         }
         void checkBox1_CheckedChanged(object sender, EventArgs e)
@@ -225,55 +233,51 @@ namespace BG3Cam
         }
 
         //camera tilt from mouse
-        async Task ChangePitchOnMouseMove()
+        void ChangePitchOnMouseMove()
         {
-            while (running)
+            var diff = 0;
+            var Mouse = false;
+            if (Hotkeys.SinglePress(Keys.MButton)) prevMouseY = Cursor.Position.Y;
+
+            if (Hotkeys.IsPressed(Keys.MButton) || Hotkeys.IsPressed(Keys.R))
             {
-                var diff = 0;
-                var Mouse = false;
-                if (Hotkeys.SinglePress(Keys.MButton)) prevMouseY = Cursor.Position.Y;
+                diff = Cursor.Position.Y - prevMouseY;
+                Mouse = true;
+            }
 
-                if (Hotkeys.IsPressed(Keys.MButton) || Hotkeys.IsPressed(Keys.R))
+            if (controller.IsConnected == true && controller.GetState().Gamepad.Buttons == GamepadButtonFlags.RightThumb)
+            {
+                gamepad = controller.GetState().Gamepad;
+                if (gamepad.RightThumbY > 4500 && gamepad.RightThumbY < 24000)
                 {
-                    diff = Cursor.Position.Y - prevMouseY;
-                    Mouse = true;
+                    diff = 15;
                 }
+                else if (gamepad.RightThumbY < -4500 && gamepad.RightThumbY > -24000)
+                {
+                    diff = -15;
+                }
+            }
 
-                if (controller.IsConnected == true && controller.GetState().Gamepad.Buttons == GamepadButtonFlags.RightThumb)
+            if (diff != 0)
+            {
+                curTilt += diff * 0.05f;
+                mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset, curTilt);
+                mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset + 4, curTilt);
+                mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset + 8, curTilt);
+                mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset + 12, curTilt);
+                mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset, curTilt);
+                mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset + 4, curTilt);
+                mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset + 8, curTilt);
+                mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset + 12, curTilt);
+                if (Mouse == false)
                 {
-                    gamepad = controller.GetState().Gamepad;
-                    if (gamepad.RightThumbY > 4500 && gamepad.RightThumbY < 24000)
-                    {
-                        diff = 15;
-                    }
-                    else if (gamepad.RightThumbY < -4500 && gamepad.RightThumbY > -24000)
-                    {
-                        diff = -15;
-                    }
+                    prevMouseY = (int)curTilt;
                 }
-
-                if (diff != 0)
+                else
                 {
-                    curTilt += diff * 0.05f;
-                    mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset, curTilt);
-                    mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset + 4, curTilt);
-                    mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset + 8, curTilt);
-                    mem.WriteProcessMemory(obj + worldCamOffset + camTiltOffset + 12, curTilt);
-                    mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset, curTilt);
-                    mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset + 4, curTilt);
-                    mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset + 8, curTilt);
-                    mem.WriteProcessMemory(obj + battleCamOffset + camTiltOffset + 12, curTilt);
-                    if (Mouse == false)
-                    {
-                        prevMouseY = (int)curTilt;
-                    }
-                    else
-                    {
-                        prevMouseY = Cursor.Position.Y;
-                        Mouse = false;
-                    }
+                    prevMouseY = Cursor.Position.Y;
+                    Mouse = false;
                 }
-                await Task.Delay(16);
             }
         }
 
